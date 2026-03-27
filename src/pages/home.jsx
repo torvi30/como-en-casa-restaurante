@@ -17,7 +17,9 @@ function Home() {
 
   const [customerData, setCustomerData] = useState({
     name: "",
+    lastName: "",
     phone: "",
+    optionalPhone: "",
     orderType: "domicilio",
     address: "",
     notes: "",

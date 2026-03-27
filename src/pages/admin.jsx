@@ -1,6 +1,14 @@
 import { useMemo, useState } from "react";
 import AdminLogin from "../components/adminLogin";
 import productsData from "../data/products";
+import Swal from "sweetalert2";
+import Highcharts from "highcharts";
+import HighchartsReactModule from "highcharts-react-official";
+
+const HighchartsReact =
+  typeof HighchartsReactModule === "function"
+    ? HighchartsReactModule
+    : HighchartsReactModule?.default;
 
 function safeParse(key, fallback) {
   try {
@@ -29,6 +37,29 @@ function formatStatus(status) {
   return "Pendiente";
 }
 
+function orderTypeLabel(orderType) {
+  if (orderType === "recogen") return "Para llevar";
+  if (orderType === "comen-alla") return "Comer acá";
+  return "Domicilio";
+}
+
+function getOrderDate(order) {
+  if (typeof order?.createdAt === "number") return new Date(order.createdAt);
+  if (typeof order?.id === "number") return new Date(order.id);
+  if (order?.date) {
+    const d = new Date(order.date);
+    if (!Number.isNaN(d.getTime())) return d;
+  }
+  return new Date();
+}
+
+function dayKey(date) {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, "0");
+  const d = String(date.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
+
 function Admin() {
   const [isLogged, setIsLogged] = useState(false);
   const [activeTab, setActiveTab] = useState("pedidos");
@@ -51,6 +82,7 @@ function Admin() {
   const [selectedOrder, setSelectedOrder] = useState(null);
   const [selectedCustomerOrders, setSelectedCustomerOrders] = useState(null);
   const [selectedCustomerName, setSelectedCustomerName] = useState("");
+  const [invoiceDraft, setInvoiceDraft] = useState(null);
 
   const [editingProductId, setEditingProductId] = useState(null);
   const [productForm, setProductForm] = useState({
@@ -93,13 +125,22 @@ function Admin() {
   };
 
   const deleteOrder = (id) => {
-    const confirmDelete = window.confirm("¿Seguro que quieres eliminar este pedido?");
-    if (!confirmDelete) return;
+    Swal.fire({
+      icon: "warning",
+      title: "Eliminar pedido",
+      text: "¿Seguro que quieres eliminar este pedido?",
+      showCancelButton: true,
+      confirmButtonText: "Eliminar",
+      cancelButtonText: "Cancelar",
+      reverseButtons: true,
+    }).then((result) => {
+      if (!result.isConfirmed) return;
 
-    const updated = orders.filter((order) => order.id !== id);
-    saveOrders(updated);
+      const updated = orders.filter((order) => order.id !== id);
+      saveOrders(updated);
 
-    if (selectedOrder?.id === id) setSelectedOrder(null);
+      if (selectedOrder?.id === id) setSelectedOrder(null);
+    });
   };
 
   const updateOrderStatus = (id, newStatus) => {
@@ -125,7 +166,12 @@ function Admin() {
     const phone = (order.customer?.phone || "").replace(/\D/g, "");
 
     if (!phone) {
-      alert("Este pedido no tiene teléfono registrado.");
+      Swal.fire({
+        icon: "info",
+        title: "Sin celular",
+        text: "Este pedido no tiene celular registrado.",
+        confirmButtonText: "Ok",
+      });
       return;
     }
 
@@ -138,25 +184,87 @@ function Admin() {
     window.open(url, "_blank");
   };
 
-  const generarFactura = (order) => {
+  const openInvoiceEditor = (order) => {
+    setInvoiceDraft({
+      orderId: order.id,
+      businessName: "Como En Casa",
+      date: order.date || new Date().toLocaleString("es-CO"),
+      customerName: order.customer?.name || "",
+      customerPhone: order.customer?.phone || "",
+      orderType:
+        order.customer?.orderType === "recogen"
+          ? "Recogen"
+          : order.customer?.orderType === "comen-alla"
+          ? "Comen allá"
+          : "Domicilio",
+      address: order.customer?.address || "",
+      notes: order.customer?.notes || "",
+      observations: "",
+      discount: 0,
+      deliveryFee: 0,
+      items: (order.items || []).map((item) => ({
+        ...item,
+      })),
+    });
+  };
+
+  const handleInvoiceChange = (e) => {
+    const { name, value } = e.target;
+
+    setInvoiceDraft((prev) => ({
+      ...prev,
+      [name]:
+        name === "discount" || name === "deliveryFee"
+          ? Number(value || 0)
+          : value,
+    }));
+  };
+
+  const handleInvoiceItemChange = (index, field, value) => {
+    setInvoiceDraft((prev) => {
+      const updatedItems = [...prev.items];
+      updatedItems[index] = {
+        ...updatedItems[index],
+        [field]:
+          field === "quantity" || field === "price"
+            ? Number(value || 0)
+            : value,
+      };
+
+      return {
+        ...prev,
+        items: updatedItems,
+      };
+    });
+  };
+
+  const printInvoiceDraft = () => {
+    if (!invoiceDraft) return;
+
+    const subtotal = invoiceDraft.items.reduce(
+      (sum, item) => sum + Number(item.price) * Number(item.quantity),
+      0
+    );
+
+    const finalTotal =
+      subtotal - Number(invoiceDraft.discount || 0) + Number(invoiceDraft.deliveryFee || 0);
+
     const win = window.open("", "_blank");
 
     if (!win) {
-      alert("El navegador bloqueó la ventana de factura.");
+      Swal.fire({
+        icon: "error",
+        title: "Ventana bloqueada",
+        text: "El navegador bloqueó la ventana de factura. Permite ventanas emergentes e inténtalo de nuevo.",
+        confirmButtonText: "Ok",
+      });
       return;
     }
-
-    const tipoPedido =
-      order.customer?.orderType === "domicilio"
-        ? "Domicilio"
-        : order.customer?.orderType === "recogen"
-        ? "Recogen"
-        : "Comen allá";
 
     const html = `
       <html>
       <head>
-        <title>Factura Pedido #${order.id}</title>
+        <title>Factura Editable</title>
         <style>
           body {
             font-family: Arial, sans-serif;
@@ -176,12 +284,14 @@ function Admin() {
             color: #666;
           }
           .box {
-            margin-bottom: 12px;
+            margin-bottom: 10px;
             font-size: 15px;
           }
           .section-title {
-            margin: 25px 0 12px;
+            margin: 22px 0 12px;
             color: #5c3b1e;
+            font-size: 18px;
+            font-weight: bold;
           }
           table {
             width: 100%;
@@ -196,21 +306,33 @@ function Admin() {
           th {
             background: #f8f5f0;
           }
-          .total {
+          .totals {
             margin-top: 20px;
-            text-align: right;
+            width: 100%;
+            max-width: 360px;
+            margin-left: auto;
+          }
+          .totals-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 8px 0;
+          }
+          .final {
             font-size: 22px;
             font-weight: bold;
             color: #5c3b1e;
+            border-top: 2px solid #ddd;
+            margin-top: 10px;
+            padding-top: 12px;
           }
           .notes {
-            margin-top: 15px;
+            margin-top: 18px;
             padding: 12px;
             background: #f8f5f0;
             border-radius: 8px;
           }
           .print-btn {
-            margin-top: 30px;
+            margin-top: 28px;
             padding: 12px 16px;
             border: none;
             background: #5c3b1e;
@@ -220,62 +342,85 @@ function Admin() {
             font-weight: bold;
           }
           @media print {
-            .print-btn { display: none; }
+            .print-btn {
+              display: none;
+            }
           }
         </style>
       </head>
       <body>
         <div class="header">
-          <h1>Como En Casa</h1>
-          <p>Factura simple del pedido</p>
+          <h1>${invoiceDraft.businessName}</h1>
+          <p>Factura del pedido #${invoiceDraft.orderId}</p>
         </div>
 
-        <div class="box"><strong>Pedido #:</strong> ${order.id}</div>
-        <div class="box"><strong>Fecha:</strong> ${order.date}</div>
-        <div class="box"><strong>Cliente:</strong> ${order.customer?.name || ""}</div>
-        <div class="box"><strong>Teléfono:</strong> ${order.customer?.phone || ""}</div>
-        <div class="box"><strong>Tipo de pedido:</strong> ${tipoPedido}</div>
-
+        <div class="box"><strong>Fecha:</strong> ${invoiceDraft.date}</div>
+        <div class="box"><strong>Cliente:</strong> ${invoiceDraft.customerName}</div>
+        <div class="box"><strong>Teléfono:</strong> ${invoiceDraft.customerPhone}</div>
+        <div class="box"><strong>Tipo de pedido:</strong> ${invoiceDraft.orderType}</div>
         ${
-          order.customer?.orderType === "domicilio"
-            ? `<div class="box"><strong>Dirección:</strong> ${order.customer?.address || ""}</div>`
+          invoiceDraft.address
+            ? `<div class="box"><strong>Dirección:</strong> ${invoiceDraft.address}</div>`
             : ""
         }
 
-        <div class="section-title"><strong>Productos</strong></div>
+        <div class="section-title">Productos</div>
 
         <table>
           <thead>
             <tr>
               <th>Producto</th>
               <th>Cantidad</th>
+              <th>Valor unitario</th>
               <th>Total</th>
             </tr>
           </thead>
           <tbody>
-            ${order.items
+            ${invoiceDraft.items
               .map(
                 (item) => `
-                <tr>
-                  <td>${item.name}</td>
-                  <td>${item.quantity}</td>
-                  <td>$${(item.price * item.quantity).toLocaleString("es-CO")}</td>
-                </tr>
-              `
+                  <tr>
+                    <td>${item.name}</td>
+                    <td>${item.quantity}</td>
+                    <td>$${Number(item.price).toLocaleString("es-CO")}</td>
+                    <td>$${(Number(item.price) * Number(item.quantity)).toLocaleString("es-CO")}</td>
+                  </tr>
+                `
               )
               .join("")}
           </tbody>
         </table>
 
+        <div class="totals">
+          <div class="totals-row">
+            <span>Subtotal</span>
+            <strong>$${subtotal.toLocaleString("es-CO")}</strong>
+          </div>
+          <div class="totals-row">
+            <span>Descuento</span>
+            <strong>$${Number(invoiceDraft.discount || 0).toLocaleString("es-CO")}</strong>
+          </div>
+          <div class="totals-row">
+            <span>Domicilio extra</span>
+            <strong>$${Number(invoiceDraft.deliveryFee || 0).toLocaleString("es-CO")}</strong>
+          </div>
+          <div class="totals-row final">
+            <span>Total final</span>
+            <strong>$${finalTotal.toLocaleString("es-CO")}</strong>
+          </div>
+        </div>
+
         ${
-          order.customer?.notes
-            ? `<div class="notes"><strong>Notas:</strong> ${order.customer.notes}</div>`
+          invoiceDraft.notes
+            ? `<div class="notes"><strong>Notas:</strong> ${invoiceDraft.notes}</div>`
             : ""
         }
 
-        <div class="total">
-          Total: $${order.total.toLocaleString("es-CO")}
-        </div>
+        ${
+          invoiceDraft.observations
+            ? `<div class="notes"><strong>Observaciones:</strong> ${invoiceDraft.observations}</div>`
+            : ""
+        }
 
         <button class="print-btn" onclick="window.print()">Imprimir factura</button>
       </body>
@@ -371,13 +516,22 @@ function Admin() {
   };
 
   const deleteProduct = (id) => {
-    const confirmDelete = window.confirm("¿Eliminar este producto?");
-    if (!confirmDelete) return;
+    Swal.fire({
+      icon: "warning",
+      title: "Eliminar producto",
+      text: "¿Eliminar este producto?",
+      showCancelButton: true,
+      confirmButtonText: "Eliminar",
+      cancelButtonText: "Cancelar",
+      reverseButtons: true,
+    }).then((result) => {
+      if (!result.isConfirmed) return;
 
-    const updated = products.filter((product) => product.id !== id);
-    saveProducts(updated);
+      const updated = products.filter((product) => product.id !== id);
+      saveProducts(updated);
 
-    if (editingProductId === id) resetProductForm();
+      if (editingProductId === id) resetProductForm();
+    });
   };
 
   const handleCustomerChange = (e) => {
@@ -410,11 +564,20 @@ function Admin() {
   };
 
   const deleteManualCustomer = (id) => {
-    const confirmDelete = window.confirm("¿Eliminar este cliente?");
-    if (!confirmDelete) return;
+    Swal.fire({
+      icon: "warning",
+      title: "Eliminar cliente",
+      text: "¿Eliminar este cliente?",
+      showCancelButton: true,
+      confirmButtonText: "Eliminar",
+      cancelButtonText: "Cancelar",
+      reverseButtons: true,
+    }).then((result) => {
+      if (!result.isConfirmed) return;
 
-    const updated = customersManual.filter((customer) => customer.id !== id);
-    saveCustomers(updated);
+      const updated = customersManual.filter((customer) => customer.id !== id);
+      saveCustomers(updated);
+    });
   };
 
   const filteredOrders = useMemo(() => {
@@ -544,6 +707,123 @@ function Admin() {
     };
   }, [orders, customersAuto.length, customersManual.length, products.length]);
 
+  const dashboard = useMemo(() => {
+    const productQty = new Map();
+    const productRevenue = new Map();
+    const customers = new Map(); // phone -> data
+    const ticketsByDay = new Map(); // day -> { total, count }
+    const channelCount = { domicilio: 0, recogen: 0, "comen-alla": 0 };
+    const statusCount = { pendiente: 0, en_proceso: 0, entregado: 0 };
+    const ticketByChannel = { domicilio: { total: 0, count: 0 }, recogen: { total: 0, count: 0 }, "comen-alla": { total: 0, count: 0 } };
+    const hourCount = new Array(24).fill(0);
+
+    orders.forEach((order) => {
+      const cust = order.customer || {};
+      const phone = String(cust.phone || "").replace(/\D/g, "");
+      const orderType = cust.orderType || "domicilio";
+      const status = order.status || "pendiente";
+      const total = Number(order.total || 0);
+
+      if (channelCount[orderType] !== undefined) channelCount[orderType] += 1;
+      if (statusCount[status] !== undefined) statusCount[status] += 1;
+
+      if (ticketByChannel[orderType]) {
+        ticketByChannel[orderType].total += total;
+        ticketByChannel[orderType].count += 1;
+      }
+
+      const d = getOrderDate(order);
+      const dk = dayKey(d);
+      const prevDay = ticketsByDay.get(dk) || { total: 0, count: 0 };
+      ticketsByDay.set(dk, { total: prevDay.total + total, count: prevDay.count + 1 });
+
+      const hr = d.getHours();
+      if (Number.isInteger(hr) && hr >= 0 && hr <= 23) hourCount[hr] += 1;
+
+      if (phone) {
+        if (!customers.has(phone)) {
+          customers.set(phone, {
+            phone,
+            name: cust.name || "",
+            lastName: cust.lastName || "",
+            ordersCount: 0,
+            itemsCount: 0,
+            totalSpent: 0,
+          });
+        }
+        const c = customers.get(phone);
+        c.ordersCount += 1;
+        c.totalSpent += total;
+      }
+
+      (order.items || []).forEach((item) => {
+        const name = item.name || "Sin nombre";
+        const qty = Number(item.quantity || 0);
+        const price = Number(item.price || 0);
+        productQty.set(name, (productQty.get(name) || 0) + qty);
+        productRevenue.set(name, (productRevenue.get(name) || 0) + qty * price);
+
+        if (phone) {
+          const c = customers.get(phone);
+          if (c) c.itemsCount += qty;
+        }
+      });
+    });
+
+    const topProducts = [...productQty.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 5);
+
+    const topCustomersByOrders = [...customers.values()]
+      .sort((a, b) => b.ordersCount - a.ordersCount)
+      .slice(0, 5);
+
+    const topCustomersBySpent = [...customers.values()]
+      .sort((a, b) => b.totalSpent - a.totalSpent)
+      .slice(0, 5);
+
+    const days = [...ticketsByDay.entries()]
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .map(([k, v]) => ({
+        day: k,
+        total: v.total,
+        avg: v.count > 0 ? v.total / v.count : 0,
+        count: v.count,
+      }));
+
+    const channels = [
+      { key: "domicilio", label: "Domicilio" },
+      { key: "recogen", label: "Para llevar" },
+      { key: "comen-alla", label: "Comer acá" },
+    ];
+
+    const channelSeries = channels.map((c) => ({
+      name: c.label,
+      y: channelCount[c.key] || 0,
+    }));
+
+    const ticketChannelAvg = channels.map((c) => {
+      const t = ticketByChannel[c.key] || { total: 0, count: 0 };
+      return {
+        name: c.label,
+        y: t.count > 0 ? Math.round(t.total / t.count) : 0,
+      };
+    });
+
+    const hours = hourCount.map((count, h) => ({ h, count }));
+
+    return {
+      topProducts,
+      topCustomersByOrders,
+      topCustomersBySpent,
+      days,
+      channelSeries,
+      statusCount,
+      ticketChannelAvg,
+      hours,
+    };
+  }, [orders]);
+
   if (!isLogged) {
     return <AdminLogin onLogin={setIsLogged} />;
   }
@@ -669,7 +949,7 @@ function Admin() {
 
                   <button
                     className="btn-view"
-                    onClick={() => generarFactura(order)}
+                    onClick={() => openInvoiceEditor(order)}
                   >
                     Factura
                   </button>
@@ -1055,6 +1335,183 @@ function Admin() {
               <p>Pedidos ya finalizados</p>
             </div>
           </div>
+
+          <div className="charts-grid">
+            <div className="chart-card">
+              <div className="chart-card-top">
+                <h3>Top 5 más vendidos</h3>
+                <p>Por cantidad total en el historial</p>
+              </div>
+
+              <HighchartsReact
+                highcharts={Highcharts}
+                options={{
+                  chart: { type: "bar", backgroundColor: "transparent", height: 320 },
+                  title: { text: null },
+                  credits: { enabled: false },
+                  xAxis: {
+                    categories: dashboard.topProducts.map(([name]) => name),
+                    title: { text: null },
+                  },
+                  yAxis: { title: { text: "Unidades" } },
+                  legend: { enabled: false },
+                  tooltip: { pointFormat: "<b>{point.y}</b> unidades" },
+                  series: [
+                    {
+                      name: "Unidades",
+                      data: dashboard.topProducts.map(([, qty]) => qty),
+                      color: "#6f4a32",
+                    },
+                  ],
+                }}
+              />
+            </div>
+
+            <div className="chart-card">
+              <div className="chart-card-top">
+                <h3>Clientes que más solicitan</h3>
+                <p>Top 5 por número de pedidos (celular único)</p>
+              </div>
+
+              <HighchartsReact
+                highcharts={Highcharts}
+                options={{
+                  chart: { type: "column", backgroundColor: "transparent", height: 320 },
+                  title: { text: null },
+                  credits: { enabled: false },
+                  xAxis: {
+                    categories: dashboard.topCustomersByOrders.map((c) =>
+                      `${(c.name || "").trim()} ${(c.lastName || "").trim()}`.trim() || c.phone
+                    ),
+                    labels: { rotation: -25 },
+                  },
+                  yAxis: { title: { text: "Pedidos" } },
+                  legend: { enabled: false },
+                  tooltip: { pointFormat: "<b>{point.y}</b> pedidos" },
+                  series: [
+                    {
+                      name: "Pedidos",
+                      data: dashboard.topCustomersByOrders.map((c) => c.ordersCount),
+                      color: "#8a5a3b",
+                    },
+                  ],
+                }}
+              />
+            </div>
+
+            <div className="chart-card chart-card-wide">
+              <div className="chart-card-top">
+                <h3>Histórico de ticket diario</h3>
+                <p>Total y promedio por día</p>
+              </div>
+
+              <HighchartsReact
+                highcharts={Highcharts}
+                options={{
+                  chart: { type: "areaspline", backgroundColor: "transparent", height: 340 },
+                  title: { text: null },
+                  credits: { enabled: false },
+                  xAxis: {
+                    categories: dashboard.days.map((d) => d.day),
+                    tickInterval: Math.max(1, Math.floor(dashboard.days.length / 8)),
+                  },
+                  yAxis: { title: { text: "COP" } },
+                  tooltip: { shared: true },
+                  series: [
+                    {
+                      name: "Total",
+                      data: dashboard.days.map((d) => Math.round(d.total)),
+                      color: "#6f4a32",
+                      fillOpacity: 0.12,
+                    },
+                    {
+                      name: "Promedio",
+                      data: dashboard.days.map((d) => Math.round(d.avg)),
+                      color: "#a9764f",
+                      fillOpacity: 0.05,
+                    },
+                  ],
+                }}
+              />
+            </div>
+
+            <div className="chart-card">
+              <div className="chart-card-top">
+                <h3>Canales</h3>
+                <p>Domicilio, para llevar y comer acá</p>
+              </div>
+
+              <HighchartsReact
+                highcharts={Highcharts}
+                options={{
+                  chart: { type: "pie", backgroundColor: "transparent", height: 320 },
+                  title: { text: null },
+                  credits: { enabled: false },
+                  tooltip: { pointFormat: "<b>{point.y}</b> pedidos" },
+                  plotOptions: {
+                    pie: {
+                      innerSize: "60%",
+                      dataLabels: { enabled: true, format: "{point.name}: {point.y}" },
+                    },
+                  },
+                  series: [{ name: "Pedidos", data: dashboard.channelSeries }],
+                }}
+              />
+            </div>
+
+            <div className="chart-card">
+              <div className="chart-card-top">
+                <h3>Ticket promedio por canal</h3>
+                <p>Comparación rápida</p>
+              </div>
+
+              <HighchartsReact
+                highcharts={Highcharts}
+                options={{
+                  chart: { type: "bar", backgroundColor: "transparent", height: 320 },
+                  title: { text: null },
+                  credits: { enabled: false },
+                  xAxis: { categories: dashboard.ticketChannelAvg.map((p) => p.name) },
+                  yAxis: { title: { text: "COP" } },
+                  legend: { enabled: false },
+                  tooltip: { pointFormat: "$ <b>{point.y}</b>" },
+                  series: [
+                    {
+                      name: "Promedio",
+                      data: dashboard.ticketChannelAvg.map((p) => p.y),
+                      color: "#5a3926",
+                    },
+                  ],
+                }}
+              />
+            </div>
+
+            <div className="chart-card">
+              <div className="chart-card-top">
+                <h3>Horas pico</h3>
+                <p>Pedidos por hora (según historial)</p>
+              </div>
+
+              <HighchartsReact
+                highcharts={Highcharts}
+                options={{
+                  chart: { type: "column", backgroundColor: "transparent", height: 320 },
+                  title: { text: null },
+                  credits: { enabled: false },
+                  xAxis: { categories: dashboard.hours.map((h) => `${String(h.h).padStart(2, "0")}:00`) },
+                  yAxis: { title: { text: "Pedidos" } },
+                  legend: { enabled: false },
+                  series: [
+                    {
+                      name: "Pedidos",
+                      data: dashboard.hours.map((h) => h.count),
+                      color: "#9c6a43",
+                    },
+                  ],
+                }}
+              />
+            </div>
+          </div>
         </div>
       )}
 
@@ -1165,7 +1622,7 @@ function Admin() {
                     </div>
 
                     <div className="admin-item-actions" style={{ marginTop: "12px" }}>
-                      <button className="btn-view" onClick={() => generarFactura(order)}>
+                      <button className="btn-view" onClick={() => openInvoiceEditor(order)}>
                         Factura
                       </button>
 
@@ -1181,6 +1638,147 @@ function Admin() {
                 ))}
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {invoiceDraft && (
+        <div className="modal-overlay" onClick={() => setInvoiceDraft(null)}>
+          <div className="modal-card invoice-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-top">
+              <h2>Factura editable</h2>
+              <button className="modal-close" onClick={() => setInvoiceDraft(null)}>
+                ✕
+              </button>
+            </div>
+
+            <div className="invoice-grid">
+              <input
+                type="text"
+                name="businessName"
+                placeholder="Nombre del negocio"
+                value={invoiceDraft.businessName}
+                onChange={handleInvoiceChange}
+              />
+
+              <input
+                type="text"
+                name="date"
+                placeholder="Fecha"
+                value={invoiceDraft.date}
+                onChange={handleInvoiceChange}
+              />
+
+              <input
+                type="text"
+                name="customerName"
+                placeholder="Cliente"
+                value={invoiceDraft.customerName}
+                onChange={handleInvoiceChange}
+              />
+
+              <input
+                type="text"
+                name="customerPhone"
+                placeholder="Teléfono"
+                value={invoiceDraft.customerPhone}
+                onChange={handleInvoiceChange}
+              />
+
+              <input
+                type="text"
+                name="orderType"
+                placeholder="Tipo de pedido"
+                value={invoiceDraft.orderType}
+                onChange={handleInvoiceChange}
+              />
+
+              <input
+                type="text"
+                name="address"
+                placeholder="Dirección"
+                value={invoiceDraft.address}
+                onChange={handleInvoiceChange}
+              />
+
+              <input
+                type="number"
+                name="discount"
+                placeholder="Descuento"
+                value={invoiceDraft.discount}
+                onChange={handleInvoiceChange}
+              />
+
+              <input
+                type="number"
+                name="deliveryFee"
+                placeholder="Domicilio extra"
+                value={invoiceDraft.deliveryFee}
+                onChange={handleInvoiceChange}
+              />
+
+              <textarea
+                name="notes"
+                placeholder="Notas"
+                value={invoiceDraft.notes}
+                onChange={handleInvoiceChange}
+              />
+
+              <textarea
+                name="observations"
+                placeholder="Observaciones de factura"
+                value={invoiceDraft.observations}
+                onChange={handleInvoiceChange}
+              />
+            </div>
+
+            <div className="invoice-edit-list">
+              <h3>Productos de la factura</h3>
+
+              {invoiceDraft.items.map((item, index) => (
+                <div className="invoice-edit-item" key={`${item.id}-${index}`}>
+                  <input
+                    type="text"
+                    value={item.name}
+                    onChange={(e) =>
+                      handleInvoiceItemChange(index, "name", e.target.value)
+                    }
+                  />
+
+                  <input
+                    type="number"
+                    value={item.quantity}
+                    onChange={(e) =>
+                      handleInvoiceItemChange(index, "quantity", e.target.value)
+                    }
+                  />
+
+                  <input
+                    type="number"
+                    value={item.price}
+                    onChange={(e) =>
+                      handleInvoiceItemChange(index, "price", e.target.value)
+                    }
+                  />
+
+                  <strong>
+                    ${(
+                      Number(item.quantity) * Number(item.price)
+                    ).toLocaleString("es-CO")}
+                  </strong>
+                </div>
+              ))}
+            </div>
+
+            <div className="admin-item-actions" style={{ marginTop: "18px" }}>
+              <button className="btn-view" onClick={printInvoiceDraft}>
+                Imprimir factura
+              </button>
+
+              <button className="btn-delete" onClick={() => setInvoiceDraft(null)}>
+                Cerrar
+              </button>
+            </div>
           </div>
         </div>
       )}

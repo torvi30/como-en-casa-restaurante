@@ -40,11 +40,24 @@ export function createWhatsAppLink(cart, customerData, total) {
     .map((p) => `${p.name} - $${p.price}`)
     .join("\n");
 
+  const fullName = `${customerData.name || ""} ${customerData.lastName || ""}`.trim();
+  const optionalPhone = (customerData.optionalPhone || "").trim();
+
   const msg = `
 Pedido nuevo
 
-Cliente: ${customerData.name}
-Tel: ${customerData.phone}
+Cliente: ${fullName || customerData.name}
+Celular: ${customerData.phone}
+${optionalPhone ? `Tel fijo: ${optionalPhone}\n` : ""}
+Tipo: ${
+    customerData.orderType === "recogen"
+      ? "Para llevar"
+      : customerData.orderType === "comen-alla"
+      ? "Comer acá"
+      : "Domicilio"
+  }
+${customerData.orderType === "domicilio" ? `Dirección: ${customerData.address || ""}\n` : ""}
+${customerData.notes ? `Notas: ${customerData.notes}\n` : ""}
 
 ${text}
 

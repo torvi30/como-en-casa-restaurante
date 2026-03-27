@@ -1,194 +1,222 @@
-import { useState } from "react";
-import AdminLogin from "../components/adminLogin";
+import { createWhatsAppLink, saveOrderToHistory } from "../utils/whatsapp";
+import Swal from "sweetalert2";
 
-function Admin() {
-  const [isLogged, setIsLogged] = useState(false);
-  const [activeTab, setActiveTab] = useState("pedidos");
-  const [selectedCustomerOrders, setSelectedCustomerOrders] = useState(null);
+function Cart({
+  cart,
+  removeFromCart,
+  clearCart,
+  customerData,
+  handleCustomerChange,
+}) {
+  const total = cart.reduce((acc, item) => acc + item.price, 0);
 
-  const orders =
-    JSON.parse(localStorage.getItem("restaurant_orders")) || [];
-
-  const getOrdersByCustomer = (phone) => {
-    return orders.filter(
-      (order) => order.customer?.phone === phone
-    );
-  };
-
-  const customers = {};
-
-  orders.forEach((order) => {
-    const phone = order.customer?.phone || "sin-telefono";
-
-    if (!customers[phone]) {
-      customers[phone] = {
-        name: order.customer?.name || "Sin nombre",
-        phone,
-        totalOrders: 0,
+  const validateOrder = () => {
+    if (cart.length === 0) {
+      return {
+        ok: false,
+        title: "Tu pedido está vacío",
+        text: "Agrega productos antes de enviar por WhatsApp.",
       };
     }
 
-    customers[phone].totalOrders += 1;
-  });
+    const firstName = (customerData.name || "").trim();
+    const lastName = (customerData.lastName || "").trim();
+    const mobileRaw = (customerData.phone || "").replace(/\D/g, "");
+    const optionalPhone = (customerData.optionalPhone || "").trim();
+    const address = (customerData.address || "").trim();
 
-  const customerList = Object.values(customers);
+    if (firstName.length <= 3 || lastName.length <= 3) {
+      return {
+        ok: false,
+        title: "Nombre incompleto",
+        text: "Escribe nombre y apellido (más de 3 caracteres cada uno).",
+      };
+    }
 
-  if (!isLogged) {
-    return <AdminLogin onLogin={setIsLogged} />;
-  }
+    if (!/^3\d{9}$/.test(mobileRaw)) {
+      return {
+        ok: false,
+        title: "Celular inválido",
+        text: "El número debe empezar por 3 y tener 10 dígitos.",
+      };
+    }
+
+    if (customerData.orderType === "domicilio" && address.length === 0) {
+      return {
+        ok: false,
+        title: "Falta la dirección",
+        text: "Para domicilio debes escribir la dirección.",
+      };
+    }
+
+    return {
+      ok: true,
+      normalizedCustomer: {
+        ...customerData,
+        name: firstName,
+        lastName,
+        phone: mobileRaw,
+        optionalPhone,
+        address,
+      },
+    };
+  };
+
+  const handleSendOrder = async () => {
+    const validation = validateOrder();
+
+    if (!validation.ok) {
+      await Swal.fire({
+        icon: "warning",
+        title: validation.title,
+        text: validation.text,
+        confirmButtonText: "Listo",
+      });
+      return;
+    }
+
+    const { isConfirmed } = await Swal.fire({
+      icon: "question",
+      title: "¿Enviar pedido por WhatsApp?",
+      text: "Revisa que la información esté correcta antes de continuar.",
+      showCancelButton: true,
+      confirmButtonText: "Enviar",
+      cancelButtonText: "Cancelar",
+      reverseButtons: true,
+    });
+
+    if (!isConfirmed) return;
+
+    saveOrderToHistory(cart, validation.normalizedCustomer, total);
+
+    const link = createWhatsAppLink(cart, validation.normalizedCustomer, total);
+    window.open(link, "_blank");
+
+    await Swal.fire({
+      icon: "success",
+      title: "Pedido listo",
+      text: "Se abrió WhatsApp para enviar tu pedido.",
+      timer: 1400,
+      showConfirmButton: false,
+    });
+
+    clearCart();
+  };
 
   return (
-    <section style={{ padding: "20px" }}>
-      <h1>Panel Admin 📊</h1>
+    <aside className="cart-box">
+      <h2>Mi pedido</h2>
 
-      <div style={{ marginBottom: "20px" }}>
-        <button onClick={() => setActiveTab("pedidos")}>
-          Pedidos
-        </button>
+      <div className="customer-form">
+        <input
+          type="text"
+          name="name"
+          placeholder="Nombre"
+          value={customerData.name}
+          onChange={handleCustomerChange}
+        />
 
-        <button onClick={() => setActiveTab("clientes")}>
-          Clientes
-        </button>
+        <input
+          type="text"
+          name="lastName"
+          placeholder="Apellido"
+          value={customerData.lastName || ""}
+          onChange={handleCustomerChange}
+        />
+
+        <input
+          type="tel"
+          inputMode="numeric"
+          name="phone"
+          placeholder="Celular (10 dígitos)"
+          value={customerData.phone}
+          onChange={handleCustomerChange}
+        />
+
+        <input
+          type="tel"
+          name="optionalPhone"
+          placeholder="Teléfono fijo (opcional)"
+          value={customerData.optionalPhone || ""}
+          onChange={handleCustomerChange}
+        />
+
+        <select
+          name="orderType"
+          value={customerData.orderType}
+          onChange={handleCustomerChange}
+        >
+          <option value="domicilio">Domicilio</option>
+          <option value="recogen">Recogen</option>
+          <option value="comen-alla">Comen allá</option>
+        </select>
+
+        {customerData.orderType === "domicilio" && (
+          <input
+            type="text"
+            name="address"
+            placeholder="Dirección"
+            value={customerData.address}
+            onChange={handleCustomerChange}
+          />
+        )}
+
+        <textarea
+          name="notes"
+          placeholder="Notas"
+          value={customerData.notes}
+          onChange={handleCustomerChange}
+        />
       </div>
 
-      {/* ===================== PEDIDOS ===================== */}
-      {activeTab === "pedidos" && (
-        <div>
-          {orders.length === 0 ? (
-            <p>No hay pedidos</p>
-          ) : (
-            orders.map((order) => (
-              <div
-                key={order.id}
-                style={{
-                  border: "1px solid #ddd",
-                  padding: "10px",
-                  marginBottom: "10px",
-                  borderRadius: "10px",
-                }}
-              >
-                <h3>Pedido #{order.id}</h3>
-                <p><strong>Cliente:</strong> {order.customer?.name}</p>
-                <p><strong>Tel:</strong> {order.customer?.phone}</p>
-                <p><strong>Fecha:</strong> {order.date}</p>
-
-                {order.items.map((item, i) => (
-                  <div key={i}>
-                    {item.name} x{item.quantity}
-                  </div>
-                ))}
-
-                <strong>
-                  Total: ${order.total.toLocaleString("es-CO")}
-                </strong>
-              </div>
-            ))
-          )}
-        </div>
-      )}
-
-      {/* ===================== CLIENTES ===================== */}
-      {activeTab === "clientes" && (
-        <div>
-          {customerList.length === 0 ? (
-            <p>No hay clientes</p>
-          ) : (
-            customerList.map((customer, index) => (
-              <div
-                key={index}
-                style={{
-                  border: "1px solid #ddd",
-                  padding: "10px",
-                  marginBottom: "10px",
-                  borderRadius: "10px",
-                }}
-              >
-                <h3>{customer.name}</h3>
-                <p>Tel: {customer.phone}</p>
-                <p>Pedidos: {customer.totalOrders}</p>
+      {cart.length === 0 ? (
+        <p className="empty-cart-text">No hay productos</p>
+      ) : (
+        <>
+          <div className="cart-items-list">
+            {cart.map((item, index) => (
+              <div className="cart-item" key={`${item.id}-${index}`}>
+                <div className="cart-item-info">
+                  <strong>{item.name}</strong>
+                  <p>${item.price.toLocaleString("es-CO")}</p>
+                </div>
 
                 <button
-                  onClick={() =>
-                    setSelectedCustomerOrders(
-                      getOrdersByCustomer(customer.phone)
-                    )
-                  }
+                  type="button"
+                  className="cart-remove-btn"
+                  onClick={() => removeFromCart(item.id)}
                 >
-                  Ver pedidos
+                  Quitar
                 </button>
               </div>
-            ))
-          )}
-        </div>
-      )}
+            ))}
+          </div>
 
-      {/* ===================== MODAL ===================== */}
-      {selectedCustomerOrders && (
-        <div
-          onClick={() => setSelectedCustomerOrders(null)}
-          style={{
-            position: "fixed",
-            top: 0,
-            left: 0,
-            width: "100%",
-            height: "100%",
-            background: "rgba(0,0,0,0.5)",
-            display: "flex",
-            justifyContent: "center",
-            alignItems: "center",
-          }}
-        >
-          <div
-            onClick={(e) => e.stopPropagation()}
-            style={{
-              background: "white",
-              padding: "20px",
-              borderRadius: "10px",
-              width: "400px",
-              maxHeight: "80vh",
-              overflowY: "auto",
-            }}
-          >
-            <h2>Pedidos del cliente</h2>
+          <h3 className="cart-total">
+            Total: ${total.toLocaleString("es-CO")}
+          </h3>
 
-            {selectedCustomerOrders.length === 0 ? (
-              <p>No hay pedidos</p>
-            ) : (
-              selectedCustomerOrders.map((order) => (
-                <div
-                  key={order.id}
-                  style={{
-                    borderBottom: "1px solid #ddd",
-                    marginBottom: "10px",
-                    paddingBottom: "10px",
-                  }}
-                >
-                  <p><strong>Fecha:</strong> {order.date}</p>
-
-                  {order.items.map((item, i) => (
-                    <div key={i}>
-                      {item.name} x{item.quantity}
-                    </div>
-                  ))}
-
-                  <strong>
-                    Total: ${order.total.toLocaleString("es-CO")}
-                  </strong>
-                </div>
-              ))
-            )}
+          <div className="cart-actions">
+            <button
+              type="button"
+              className="whatsapp-btn"
+              onClick={handleSendOrder}
+            >
+              Enviar pedido por WhatsApp
+            </button>
 
             <button
-              onClick={() => setSelectedCustomerOrders(null)}
-              style={{ marginTop: "10px" }}
+              type="button"
+              className="clear-btn"
+              onClick={clearCart}
             >
-              Cerrar
+              Vaciar pedido
             </button>
           </div>
-        </div>
+        </>
       )}
-    </section>
+    </aside>
   );
 }
 
-export default Admin;
+export default Cart;
