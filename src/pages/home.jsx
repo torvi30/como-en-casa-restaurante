@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import productsData from "../data/products";
+import Navbar from "../components/navbar";
 import Hero from "../components/hero";
 import ProductCard from "../components/productCard";
 import Cart from "../components/cart";
@@ -65,6 +66,7 @@ function Home() {
 
   return (
     <>
+      <Navbar />
       <Hero />
 
       <section className="menu-section" id="menu">

@@ -1,143 +1,194 @@
-import {
-    generateWhatsAppLink,
-    saveOrderToHistory,
-    groupCartItems,
-  } from "../utils/whatsapp";
-  
-  function Cart({
-    cart,
-    removeFromCart,
-    clearCart,
-    customerData,
-    handleCustomerChange,
-  }) {
-    const grouped = groupCartItems(cart);
-  
-    const total = grouped.reduce((sum, item) => {
-      return sum + item.price * item.quantity;
-    }, 0);
-  
-    const validateOrder = () => {
-      if (cart.length === 0) {
-        alert("El carrito está vacío 🛒");
-        return false;
-      }
-  
-      if (!customerData.name.trim()) {
-        alert("Falta el nombre del cliente");
-        return false;
-      }
-  
-      if (!customerData.phone.trim()) {
-        alert("Falta el teléfono del cliente");
-        return false;
-      }
-  
-      if (
-        customerData.orderType === "domicilio" &&
-        !customerData.address.trim()
-      ) {
-        alert("Falta la dirección para el domicilio");
-        return false;
-      }
-  
-      return true;
-    };
-  
-    return (
-      <div className="cart-box">
-        <h2>Mi pedido</h2>
-  
-        <div className="customer-form">
-          <input
-            type="text"
-            name="name"
-            placeholder="Nombre del cliente"
-            value={customerData.name}
-            onChange={handleCustomerChange}
-          />
-  
-          <input
-            type="text"
-            name="phone"
-            placeholder="Teléfono"
-            value={customerData.phone}
-            onChange={handleCustomerChange}
-          />
-  
-          <select
-            name="orderType"
-            value={customerData.orderType}
-            onChange={handleCustomerChange}
-          >
-            <option value="domicilio">Domicilio</option>
-            <option value="recogen">Recogen</option>
-            <option value="comen_alla">Comen allá</option>
-          </select>
-  
-          {customerData.orderType === "domicilio" && (
-            <input
-              type="text"
-              name="address"
-              placeholder="Dirección"
-              value={customerData.address}
-              onChange={handleCustomerChange}
-            />
-          )}
-  
-          <textarea
-            name="notes"
-            placeholder="Notas del pedido"
-            value={customerData.notes}
-            onChange={handleCustomerChange}
-          />
-        </div>
-  
-        {grouped.length === 0 ? (
-          <p>No has agregado productos todavía.</p>
-        ) : (
-          <>
-            {grouped.map((item) => (
-              <div className="cart-item" key={item.id}>
-                <div>
-                  <strong>{item.name}</strong>
-                  <p>
-                    {item.quantity} x ${item.price.toLocaleString("es-CO")}
-                  </p>
-                </div>
-  
-                <button onClick={() => removeFromCart(item.id)}>Quitar</button>
-              </div>
-            ))}
-  
-            <h3>Total: ${total.toLocaleString("es-CO")}</h3>
-  
-            <div className="cart-actions">
-              <a
-                href={generateWhatsAppLink(cart, customerData)}
-                target="_blank"
-                rel="noreferrer"
-                className="whatsapp-btn"
-                onClick={(e) => {
-                  if (!validateOrder()) {
-                    e.preventDefault();
-                    return;
-                  }
-  
-                  saveOrderToHistory(cart, customerData);
+import { useState } from "react";
+import AdminLogin from "../components/adminLogin";
+
+function Admin() {
+  const [isLogged, setIsLogged] = useState(false);
+  const [activeTab, setActiveTab] = useState("pedidos");
+  const [selectedCustomerOrders, setSelectedCustomerOrders] = useState(null);
+
+  const orders =
+    JSON.parse(localStorage.getItem("restaurant_orders")) || [];
+
+  const getOrdersByCustomer = (phone) => {
+    return orders.filter(
+      (order) => order.customer?.phone === phone
+    );
+  };
+
+  const customers = {};
+
+  orders.forEach((order) => {
+    const phone = order.customer?.phone || "sin-telefono";
+
+    if (!customers[phone]) {
+      customers[phone] = {
+        name: order.customer?.name || "Sin nombre",
+        phone,
+        totalOrders: 0,
+      };
+    }
+
+    customers[phone].totalOrders += 1;
+  });
+
+  const customerList = Object.values(customers);
+
+  if (!isLogged) {
+    return <AdminLogin onLogin={setIsLogged} />;
+  }
+
+  return (
+    <section style={{ padding: "20px" }}>
+      <h1>Panel Admin 📊</h1>
+
+      <div style={{ marginBottom: "20px" }}>
+        <button onClick={() => setActiveTab("pedidos")}>
+          Pedidos
+        </button>
+
+        <button onClick={() => setActiveTab("clientes")}>
+          Clientes
+        </button>
+      </div>
+
+      {/* ===================== PEDIDOS ===================== */}
+      {activeTab === "pedidos" && (
+        <div>
+          {orders.length === 0 ? (
+            <p>No hay pedidos</p>
+          ) : (
+            orders.map((order) => (
+              <div
+                key={order.id}
+                style={{
+                  border: "1px solid #ddd",
+                  padding: "10px",
+                  marginBottom: "10px",
+                  borderRadius: "10px",
                 }}
               >
-                Pedir por WhatsApp
-              </a>
-  
-              <button onClick={clearCart} className="clear-btn">
-                Vaciar pedido
-              </button>
-            </div>
-          </>
-        )}
-      </div>
-    );
-  }
-  
-  export default Cart;
+                <h3>Pedido #{order.id}</h3>
+                <p><strong>Cliente:</strong> {order.customer?.name}</p>
+                <p><strong>Tel:</strong> {order.customer?.phone}</p>
+                <p><strong>Fecha:</strong> {order.date}</p>
+
+                {order.items.map((item, i) => (
+                  <div key={i}>
+                    {item.name} x{item.quantity}
+                  </div>
+                ))}
+
+                <strong>
+                  Total: ${order.total.toLocaleString("es-CO")}
+                </strong>
+              </div>
+            ))
+          )}
+        </div>
+      )}
+
+      {/* ===================== CLIENTES ===================== */}
+      {activeTab === "clientes" && (
+        <div>
+          {customerList.length === 0 ? (
+            <p>No hay clientes</p>
+          ) : (
+            customerList.map((customer, index) => (
+              <div
+                key={index}
+                style={{
+                  border: "1px solid #ddd",
+                  padding: "10px",
+                  marginBottom: "10px",
+                  borderRadius: "10px",
+                }}
+              >
+                <h3>{customer.name}</h3>
+                <p>Tel: {customer.phone}</p>
+                <p>Pedidos: {customer.totalOrders}</p>
+
+                <button
+                  onClick={() =>
+                    setSelectedCustomerOrders(
+                      getOrdersByCustomer(customer.phone)
+                    )
+                  }
+                >
+                  Ver pedidos
+                </button>
+              </div>
+            ))
+          )}
+        </div>
+      )}
+
+      {/* ===================== MODAL ===================== */}
+      {selectedCustomerOrders && (
+        <div
+          onClick={() => setSelectedCustomerOrders(null)}
+          style={{
+            position: "fixed",
+            top: 0,
+            left: 0,
+            width: "100%",
+            height: "100%",
+            background: "rgba(0,0,0,0.5)",
+            display: "flex",
+            justifyContent: "center",
+            alignItems: "center",
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              background: "white",
+              padding: "20px",
+              borderRadius: "10px",
+              width: "400px",
+              maxHeight: "80vh",
+              overflowY: "auto",
+            }}
+          >
+            <h2>Pedidos del cliente</h2>
+
+            {selectedCustomerOrders.length === 0 ? (
+              <p>No hay pedidos</p>
+            ) : (
+              selectedCustomerOrders.map((order) => (
+                <div
+                  key={order.id}
+                  style={{
+                    borderBottom: "1px solid #ddd",
+                    marginBottom: "10px",
+                    paddingBottom: "10px",
+                  }}
+                >
+                  <p><strong>Fecha:</strong> {order.date}</p>
+
+                  {order.items.map((item, i) => (
+                    <div key={i}>
+                      {item.name} x{item.quantity}
+                    </div>
+                  ))}
+
+                  <strong>
+                    Total: ${order.total.toLocaleString("es-CO")}
+                  </strong>
+                </div>
+              ))
+            )}
+
+            <button
+              onClick={() => setSelectedCustomerOrders(null)}
+              style={{ marginTop: "10px" }}
+            >
+              Cerrar
+            </button>
+          </div>
+        </div>
+      )}
+    </section>
+  );
+}
+
+export default Admin;

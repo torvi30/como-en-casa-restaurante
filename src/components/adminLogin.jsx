@@ -1,73 +1,45 @@
-import { useEffect, useState } from "react";
-
-const DEFAULT_CREDS = {
-  username: "admin",
-  password: "1234",
-};
+import { useState } from "react";
 
 function AdminLogin({ onLogin }) {
-  const [form, setForm] = useState({ username: "", password: "" });
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
   const [error, setError] = useState("");
 
-  useEffect(() => {
-    // Inicializa credenciales si no existen
-    const saved = JSON.parse(localStorage.getItem("restaurant_admin_creds"));
-    if (!saved || !saved.username || !saved.password) {
-      localStorage.setItem(
-        "restaurant_admin_creds",
-        JSON.stringify(DEFAULT_CREDS)
-      );
-    }
-  }, []);
-
-  const handleChange = (e) => {
-    setForm({ ...form, [e.target.name]: e.target.value });
-  };
+  const ADMIN_USER = "admin";
+  const ADMIN_PASS = "1234";
 
   const handleSubmit = (e) => {
     e.preventDefault();
 
-    const creds =
-      JSON.parse(localStorage.getItem("restaurant_admin_creds")) ||
-      DEFAULT_CREDS;
-
-    if (
-      form.username === creds.username &&
-      form.password === creds.password
-    ) {
-      localStorage.setItem("restaurant_admin_logged", "true");
+    if (username === ADMIN_USER && password === ADMIN_PASS) {
       onLogin(true);
       setError("");
     } else {
-      setError("Usuario o contraseña incorrectos");
+      setError("Credenciales incorrectas");
     }
   };
 
   return (
     <div className="login-wrapper">
       <form className="login-card" onSubmit={handleSubmit}>
-        <h2>Ingreso Administrador</h2>
-        <p>Accede al panel de control</p>
+        <h2>Panel Administrador</h2>
+        <p>Ingresa para gestionar el sistema</p>
 
         <input
           type="text"
-          name="username"
           placeholder="Usuario"
-          value={form.username}
-          onChange={handleChange}
-          required
+          value={username}
+          onChange={(e) => setUsername(e.target.value)}
         />
 
         <input
           type="password"
-          name="password"
           placeholder="Contraseña"
-          value={form.password}
-          onChange={handleChange}
-          required
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
         />
 
-        {error && <p className="login-error">{error}</p>}
+        {error && <span className="login-error">{error}</span>}
 
         <button type="submit">Entrar</button>
       </form>

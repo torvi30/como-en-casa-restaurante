@@ -1,8 +1,7 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import AdminLogin from "../components/adminLogin";
 import productsData from "../data/products";
 
-/** ===== Helpers de seguridad ===== */
 function safeParse(key, fallback) {
   try {
     const raw = localStorage.getItem(key);
@@ -34,10 +33,24 @@ function Admin() {
   const [isLogged, setIsLogged] = useState(false);
   const [activeTab, setActiveTab] = useState("pedidos");
 
-  const [orders, setOrders] = useState([]);
-  const [products, setProducts] = useState([]);
+  const [orders, setOrders] = useState(
+    ensureArray("restaurant_orders").sort((a, b) => b.id - a.id)
+  );
+
+  const [products, setProducts] = useState(() => {
+    const savedProducts = safeParse("restaurant_products", null);
+    return Array.isArray(savedProducts) ? savedProducts : productsData;
+  });
+
+  const [customersManual, setCustomersManual] = useState(() => {
+    const savedCustomers = safeParse("restaurant_customers", []);
+    return Array.isArray(savedCustomers) ? savedCustomers : [];
+  });
+
   const [search, setSearch] = useState("");
   const [selectedOrder, setSelectedOrder] = useState(null);
+  const [selectedCustomerOrders, setSelectedCustomerOrders] = useState(null);
+  const [selectedCustomerName, setSelectedCustomerName] = useState("");
 
   const [editingProductId, setEditingProductId] = useState(null);
   const [productForm, setProductForm] = useState({
@@ -48,79 +61,252 @@ function Admin() {
     description: "",
   });
 
-  useEffect(() => {
-    const logged = localStorage.getItem("restaurant_admin_logged") === "true";
-    setIsLogged(logged);
+  const [customerForm, setCustomerForm] = useState({
+    name: "",
+    phone: "",
+    address: "",
+    notes: "",
+  });
 
-    // Carga segura
-    const savedOrders = ensureArray("restaurant_orders");
-    setOrders(savedOrders);
-
-    const savedProducts =
-      safeParse("restaurant_products", null) || productsData;
-    setProducts(Array.isArray(savedProducts) ? savedProducts : productsData);
-  }, []);
-
-  const saveOrders = (updated) => {
-    setOrders(updated);
-    localStorage.setItem("restaurant_orders", JSON.stringify(updated));
+  const saveOrders = (updatedOrders) => {
+    const ordered = [...updatedOrders].sort((a, b) => b.id - a.id);
+    setOrders(ordered);
+    localStorage.setItem("restaurant_orders", JSON.stringify(ordered));
   };
 
-  const saveProducts = (updated) => {
-    setProducts(updated);
-    localStorage.setItem("restaurant_products", JSON.stringify(updated));
+  const saveProducts = (updatedProducts) => {
+    setProducts(updatedProducts);
+    localStorage.setItem("restaurant_products", JSON.stringify(updatedProducts));
+  };
+
+  const saveCustomers = (updatedCustomers) => {
+    setCustomersManual(updatedCustomers);
+    localStorage.setItem("restaurant_customers", JSON.stringify(updatedCustomers));
   };
 
   const handleLogout = () => {
-    localStorage.removeItem("restaurant_admin_logged");
     setIsLogged(false);
   };
 
-  /** ===== Pedidos ===== */
+  const getOrdersByCustomer = (phone) => {
+    return orders.filter((order) => order.customer?.phone === phone);
+  };
+
   const deleteOrder = (id) => {
-    if (!window.confirm("¿Eliminar pedido?")) return;
-    const updated = orders.filter((o) => o.id !== id);
+    const confirmDelete = window.confirm("¿Seguro que quieres eliminar este pedido?");
+    if (!confirmDelete) return;
+
+    const updated = orders.filter((order) => order.id !== id);
     saveOrders(updated);
+
     if (selectedOrder?.id === id) setSelectedOrder(null);
   };
 
-  const updateOrderStatus = (id, status) => {
-    const updated = orders.map((o) =>
-      o.id === id ? { ...o, status } : o
+  const updateOrderStatus = (id, newStatus) => {
+    const updated = orders.map((order) =>
+      order.id === id ? { ...order, status: newStatus } : order
     );
     saveOrders(updated);
+
     if (selectedOrder?.id === id) {
-      setSelectedOrder(updated.find((o) => o.id === id) || null);
+      const selectedUpdated = updated.find((order) => order.id === id);
+      setSelectedOrder(selectedUpdated || null);
+    }
+
+    if (selectedCustomerOrders) {
+      const phone = selectedCustomerOrders[0]?.customer?.phone;
+      if (phone) {
+        setSelectedCustomerOrders(updated.filter((o) => o.customer?.phone === phone));
+      }
     }
   };
 
   const openWhatsApp = (order) => {
     const phone = (order.customer?.phone || "").replace(/\D/g, "");
+
     if (!phone) {
-      alert("Este pedido no tiene teléfono.");
+      alert("Este pedido no tiene teléfono registrado.");
       return;
     }
-    const msg = `Hola ${
-      order.customer?.name || "cliente"
-    }, tu pedido #${order.id} está ${formatStatus(
-      order.status || "pendiente"
-    )}.`;
-    const url = `https://wa.me/57${phone}?text=${encodeURIComponent(msg)}`;
+
+    const message =
+      `Hola ${order.customer?.name || "cliente"}, ` +
+      `te escribimos desde Como En Casa por tu pedido #${order.id}. ` +
+      `Estado actual: ${formatStatus(order.status || "pendiente")}.`;
+
+    const url = `https://wa.me/57${phone}?text=${encodeURIComponent(message)}`;
     window.open(url, "_blank");
   };
 
-  /** ===== Productos ===== */
+  const generarFactura = (order) => {
+    const win = window.open("", "_blank");
+
+    if (!win) {
+      alert("El navegador bloqueó la ventana de factura.");
+      return;
+    }
+
+    const tipoPedido =
+      order.customer?.orderType === "domicilio"
+        ? "Domicilio"
+        : order.customer?.orderType === "recogen"
+        ? "Recogen"
+        : "Comen allá";
+
+    const html = `
+      <html>
+      <head>
+        <title>Factura Pedido #${order.id}</title>
+        <style>
+          body {
+            font-family: Arial, sans-serif;
+            padding: 30px;
+            color: #222;
+          }
+          .header {
+            text-align: center;
+            margin-bottom: 30px;
+          }
+          .header h1 {
+            margin: 0;
+            color: #5c3b1e;
+          }
+          .header p {
+            margin-top: 8px;
+            color: #666;
+          }
+          .box {
+            margin-bottom: 12px;
+            font-size: 15px;
+          }
+          .section-title {
+            margin: 25px 0 12px;
+            color: #5c3b1e;
+          }
+          table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 10px;
+          }
+          th, td {
+            text-align: left;
+            padding: 10px;
+            border-bottom: 1px solid #ddd;
+          }
+          th {
+            background: #f8f5f0;
+          }
+          .total {
+            margin-top: 20px;
+            text-align: right;
+            font-size: 22px;
+            font-weight: bold;
+            color: #5c3b1e;
+          }
+          .notes {
+            margin-top: 15px;
+            padding: 12px;
+            background: #f8f5f0;
+            border-radius: 8px;
+          }
+          .print-btn {
+            margin-top: 30px;
+            padding: 12px 16px;
+            border: none;
+            background: #5c3b1e;
+            color: white;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: bold;
+          }
+          @media print {
+            .print-btn { display: none; }
+          }
+        </style>
+      </head>
+      <body>
+        <div class="header">
+          <h1>Como En Casa</h1>
+          <p>Factura simple del pedido</p>
+        </div>
+
+        <div class="box"><strong>Pedido #:</strong> ${order.id}</div>
+        <div class="box"><strong>Fecha:</strong> ${order.date}</div>
+        <div class="box"><strong>Cliente:</strong> ${order.customer?.name || ""}</div>
+        <div class="box"><strong>Teléfono:</strong> ${order.customer?.phone || ""}</div>
+        <div class="box"><strong>Tipo de pedido:</strong> ${tipoPedido}</div>
+
+        ${
+          order.customer?.orderType === "domicilio"
+            ? `<div class="box"><strong>Dirección:</strong> ${order.customer?.address || ""}</div>`
+            : ""
+        }
+
+        <div class="section-title"><strong>Productos</strong></div>
+
+        <table>
+          <thead>
+            <tr>
+              <th>Producto</th>
+              <th>Cantidad</th>
+              <th>Total</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${order.items
+              .map(
+                (item) => `
+                <tr>
+                  <td>${item.name}</td>
+                  <td>${item.quantity}</td>
+                  <td>$${(item.price * item.quantity).toLocaleString("es-CO")}</td>
+                </tr>
+              `
+              )
+              .join("")}
+          </tbody>
+        </table>
+
+        ${
+          order.customer?.notes
+            ? `<div class="notes"><strong>Notas:</strong> ${order.customer.notes}</div>`
+            : ""
+        }
+
+        <div class="total">
+          Total: $${order.total.toLocaleString("es-CO")}
+        </div>
+
+        <button class="print-btn" onclick="window.print()">Imprimir factura</button>
+      </body>
+      </html>
+    `;
+
+    win.document.open();
+    win.document.write(html);
+    win.document.close();
+  };
+
   const handleProductChange = (e) => {
-    setProductForm({ ...productForm, [e.target.name]: e.target.value });
+    setProductForm({
+      ...productForm,
+      [e.target.name]: e.target.value,
+    });
   };
 
   const handleImageUpload = (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
+
     const reader = new FileReader();
+
     reader.onloadend = () => {
-      setProductForm((prev) => ({ ...prev, image: reader.result }));
+      setProductForm((prev) => ({
+        ...prev,
+        image: reader.result,
+      }));
     };
+
     reader.readAsDataURL(file);
   };
 
@@ -139,18 +325,19 @@ function Admin() {
     e.preventDefault();
 
     if (editingProductId) {
-      const updated = products.map((p) =>
-        p.id === editingProductId
+      const updated = products.map((product) =>
+        product.id === editingProductId
           ? {
-              ...p,
+              ...product,
               name: productForm.name,
               price: Number(productForm.price),
               category: productForm.category,
               image: productForm.image,
               description: productForm.description,
             }
-          : p
+          : product
       );
+
       saveProducts(updated);
       resetProductForm();
       return;
@@ -165,92 +352,178 @@ function Admin() {
       description: productForm.description,
     };
 
-    saveProducts([...products, newProduct]);
+    const updated = [...products, newProduct];
+    saveProducts(updated);
     resetProductForm();
   };
 
-  const editProduct = (p) => {
-    setEditingProductId(p.id);
+  const editProduct = (product) => {
+    setEditingProductId(product.id);
     setProductForm({
-      name: p.name,
-      price: p.price,
-      category: p.category,
-      image: p.image,
-      description: p.description,
+      name: product.name,
+      price: product.price,
+      category: product.category,
+      image: product.image,
+      description: product.description,
     });
     setActiveTab("productos");
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
   const deleteProduct = (id) => {
-    if (!window.confirm("¿Eliminar producto?")) return;
-    const updated = products.filter((p) => p.id !== id);
+    const confirmDelete = window.confirm("¿Eliminar este producto?");
+    if (!confirmDelete) return;
+
+    const updated = products.filter((product) => product.id !== id);
     saveProducts(updated);
+
     if (editingProductId === id) resetProductForm();
   };
 
-  /** ===== Filtros ===== */
+  const handleCustomerChange = (e) => {
+    setCustomerForm({
+      ...customerForm,
+      [e.target.name]: e.target.value,
+    });
+  };
+
+  const addCustomer = (e) => {
+    e.preventDefault();
+
+    const newCustomer = {
+      id: Date.now(),
+      name: customerForm.name,
+      phone: customerForm.phone,
+      address: customerForm.address,
+      notes: customerForm.notes,
+    };
+
+    const updated = [newCustomer, ...customersManual];
+    saveCustomers(updated);
+
+    setCustomerForm({
+      name: "",
+      phone: "",
+      address: "",
+      notes: "",
+    });
+  };
+
+  const deleteManualCustomer = (id) => {
+    const confirmDelete = window.confirm("¿Eliminar este cliente?");
+    if (!confirmDelete) return;
+
+    const updated = customersManual.filter((customer) => customer.id !== id);
+    saveCustomers(updated);
+  };
+
   const filteredOrders = useMemo(() => {
-    return orders.filter((o) => {
+    return orders.filter((order) => {
       const text = `
-        ${o.customer?.name || ""}
-        ${o.customer?.phone || ""}
-        ${o.customer?.address || ""}
-        ${o.customer?.notes || ""}
-        ${o.items.map((i) => i.name).join(" ")}
+        ${order.customer?.name || ""}
+        ${order.customer?.phone || ""}
+        ${order.customer?.orderType || ""}
+        ${order.customer?.address || ""}
+        ${order.customer?.notes || ""}
+        ${order.status || ""}
+        ${order.items.map((item) => item.name).join(" ")}
       `.toLowerCase();
+
       return text.includes(search.toLowerCase());
     });
   }, [orders, search]);
 
   const filteredProducts = useMemo(() => {
-    return products.filter((p) => {
-      const text = `${p.name} ${p.category} ${p.description}`.toLowerCase();
+    return products.filter((product) => {
+      const text = `
+        ${product.name}
+        ${product.category}
+        ${product.description}
+      `.toLowerCase();
+
       return text.includes(search.toLowerCase());
     });
   }, [products, search]);
 
-  const customers = useMemo(() => {
+  const customersAuto = useMemo(() => {
     const map = {};
-    orders.forEach((o) => {
-      const phone = o.customer?.phone || `sin-${o.id}`;
+
+    orders.forEach((order) => {
+      const phone = order.customer?.phone || `sin-telefono-${order.id}`;
+
       if (!map[phone]) {
         map[phone] = {
-          name: o.customer?.name || "Sin nombre",
-          phone: o.customer?.phone || "Sin teléfono",
-          address: o.customer?.address || "",
+          name: order.customer?.name || "Sin nombre",
+          phone: order.customer?.phone || "Sin teléfono",
+          orderType: order.customer?.orderType || "N/A",
+          address: order.customer?.address || "",
           totalOrders: 0,
           totalSpent: 0,
         };
       }
+
       map[phone].totalOrders += 1;
-      map[phone].totalSpent += o.total;
+      map[phone].totalSpent += order.total;
     });
-    return Object.values(map);
-  }, [orders]);
+
+    return Object.values(map).filter((customer) => {
+      const text = `
+        ${customer.name}
+        ${customer.phone}
+        ${customer.address}
+      `.toLowerCase();
+
+      return text.includes(search.toLowerCase());
+    });
+  }, [orders, search]);
+
+  const filteredManualCustomers = useMemo(() => {
+    return customersManual.filter((customer) => {
+      const text = `
+        ${customer.name}
+        ${customer.phone}
+        ${customer.address}
+        ${customer.notes}
+      `.toLowerCase();
+
+      return text.includes(search.toLowerCase());
+    });
+  }, [customersManual, search]);
 
   const stats = useMemo(() => {
-    const totalSales = orders.reduce((s, o) => s + o.total, 0);
+    const totalSales = orders.reduce((sum, order) => sum + order.total, 0);
     const totalOrders = orders.length;
 
-    const counts = { pendiente: 0, en_proceso: 0, entregado: 0 };
+    const statusCount = {
+      pendiente: 0,
+      en_proceso: 0,
+      entregado: 0,
+    };
+
     const productCounter = {};
 
-    orders.forEach((o) => {
-      const st = o.status || "pendiente";
-      if (counts[st] !== undefined) counts[st]++;
+    orders.forEach((order) => {
+      const status = order.status || "pendiente";
+      if (statusCount[status] !== undefined) {
+        statusCount[status] += 1;
+      }
 
-      o.items.forEach((i) => {
-        productCounter[i.name] = (productCounter[i.name] || 0) + i.quantity;
+      order.items.forEach((item) => {
+        if (productCounter[item.name]) {
+          productCounter[item.name] += item.quantity;
+        } else {
+          productCounter[item.name] = item.quantity;
+        }
       });
     });
 
-    let topProduct = "Sin datos",
-      max = 0;
-    for (const k in productCounter) {
-      if (productCounter[k] > max) {
-        max = productCounter[k];
-        topProduct = k;
+    let topProduct = "Sin datos";
+    let max = 0;
+
+    for (const product in productCounter) {
+      if (productCounter[product] > max) {
+        max = productCounter[product];
+        topProduct = product;
       }
     }
 
@@ -258,42 +531,64 @@ function Admin() {
       totalSales,
       totalOrders,
       topProduct,
-      pending: counts.pendiente,
-      processing: counts.en_proceso,
-      delivered: counts.entregado,
-      totalCustomers: customers.length,
+      pending: statusCount.pendiente,
+      processing: statusCount.en_proceso,
+      delivered: statusCount.entregado,
+      totalCustomers: customersAuto.length + customersManual.length,
       totalProducts: products.length,
-      averageTicket: totalOrders ? totalSales / totalOrders : 0,
-      deliveredPercent: totalOrders
-        ? Math.round((counts.entregado / totalOrders) * 100)
-        : 0,
+      averageTicket: totalOrders > 0 ? totalSales / totalOrders : 0,
+      deliveredPercent:
+        totalOrders > 0
+          ? Math.round((statusCount.entregado / totalOrders) * 100)
+          : 0,
     };
-  }, [orders, customers, products]);
+  }, [orders, customersAuto.length, customersManual.length, products.length]);
 
-  if (!isLogged) return <AdminLogin onLogin={setIsLogged} />;
+  if (!isLogged) {
+    return <AdminLogin onLogin={setIsLogged} />;
+  }
 
   return (
     <section className="admin-page">
       <div className="admin-header">
         <div>
           <h1>Panel Admin 📊</h1>
-          <p>Pedidos, productos, clientes y métricas</p>
+          <p>Historial completo de pedidos y gestión en tiempo real</p>
         </div>
+
         <button className="logout-btn" onClick={handleLogout}>
           Cerrar sesión
         </button>
       </div>
 
       <div className="admin-tabs">
-        {["pedidos", "productos", "clientes", "metricas"].map((t) => (
-          <button
-            key={t}
-            className={activeTab === t ? "tab-btn active" : "tab-btn"}
-            onClick={() => setActiveTab(t)}
-          >
-            {t[0].toUpperCase() + t.slice(1)}
-          </button>
-        ))}
+        <button
+          className={activeTab === "pedidos" ? "tab-btn active" : "tab-btn"}
+          onClick={() => setActiveTab("pedidos")}
+        >
+          Pedidos
+        </button>
+
+        <button
+          className={activeTab === "productos" ? "tab-btn active" : "tab-btn"}
+          onClick={() => setActiveTab("productos")}
+        >
+          Productos
+        </button>
+
+        <button
+          className={activeTab === "clientes" ? "tab-btn active" : "tab-btn"}
+          onClick={() => setActiveTab("clientes")}
+        >
+          Clientes
+        </button>
+
+        <button
+          className={activeTab === "metricas" ? "tab-btn active" : "tab-btn"}
+          onClick={() => setActiveTab("metricas")}
+        >
+          Métricas
+        </button>
       </div>
 
       <div className="admin-search-box">
@@ -305,56 +600,107 @@ function Admin() {
         />
       </div>
 
-      {/* ===== PEDIDOS ===== */}
       {activeTab === "pedidos" && (
         <div className="orders-list">
           {filteredOrders.length === 0 ? (
-            <div className="empty-state">No hay pedidos</div>
+            <div className="empty-state">
+              <p>No hay pedidos todavía</p>
+            </div>
           ) : (
-            filteredOrders.map((o) => (
+            filteredOrders.map((order) => (
               <div
-                key={o.id}
-                className={`order-card status-${o.status || "pendiente"}`}
+                className={`order-card status-${order.status || "pendiente"}`}
+                key={order.id}
               >
                 <div className="order-top">
                   <div>
-                    <h3>Pedido #{o.id}</h3>
-                    <p>{o.date}</p>
+                    <h3>Pedido #{order.id}</h3>
+                    <p>{order.date}</p>
                   </div>
-                  <span className={`status-badge status-${o.status || "pendiente"}`}>
-                    {formatStatus(o.status || "pendiente")}
+
+                  <span className={`status-badge status-${order.status || "pendiente"}`}>
+                    {formatStatus(order.status || "pendiente")}
                   </span>
                 </div>
 
                 <div className="customer-info">
-                  <p><b>Cliente:</b> {o.customer?.name || "-"}</p>
-                  <p><b>Teléfono:</b> {o.customer?.phone || "-"}</p>
-                  {o.customer?.address && (
-                    <p><b>Dirección:</b> {o.customer.address}</p>
+                  <p><strong>Cliente:</strong> {order.customer?.name || "Sin nombre"}</p>
+                  <p><strong>Teléfono:</strong> {order.customer?.phone || "Sin teléfono"}</p>
+                  <p>
+                    <strong>Tipo:</strong>{" "}
+                    {order.customer?.orderType === "domicilio"
+                      ? "Domicilio"
+                      : order.customer?.orderType === "recogen"
+                      ? "Recogen"
+                      : "Comen allá"}
+                  </p>
+
+                  {order.customer?.orderType === "domicilio" && (
+                    <p><strong>Dirección:</strong> {order.customer?.address || "Sin dirección"}</p>
+                  )}
+
+                  {order.customer?.notes && (
+                    <p><strong>Notas:</strong> {order.customer.notes}</p>
                   )}
                 </div>
 
                 <div className="order-items">
-                  {o.items.map((i, idx) => (
-                    <div className="order-item" key={idx}>
-                      <span>{i.name} x{i.quantity}</span>
+                  {order.items.map((item, i) => (
+                    <div className="order-item" key={i}>
+                      <span>{item.name} x{item.quantity}</span>
                       <strong>
-                        ${(i.price * i.quantity).toLocaleString("es-CO")}
+                        ${(item.price * item.quantity).toLocaleString("es-CO")}
                       </strong>
                     </div>
                   ))}
                 </div>
 
                 <div className="order-total">
-                  Total: ${o.total.toLocaleString("es-CO")}
+                  Total: ${order.total.toLocaleString("es-CO")}
                 </div>
 
                 <div className="admin-order-buttons">
-                  <button className="btn-view" onClick={() => setSelectedOrder(o)}>Ver</button>
-                  <button className="btn-whatsapp" onClick={() => openWhatsApp(o)}>WhatsApp</button>
-                  <button className="btn-process" onClick={() => updateOrderStatus(o.id, "en_proceso")}>Proceso</button>
-                  <button className="btn-done" onClick={() => updateOrderStatus(o.id, "entregado")}>Entregado</button>
-                  <button className="btn-delete" onClick={() => deleteOrder(o.id)}>Eliminar</button>
+                  <button
+                    className="btn-view"
+                    onClick={() => setSelectedOrder(order)}
+                  >
+                    Ver detalle
+                  </button>
+
+                  <button
+                    className="btn-view"
+                    onClick={() => generarFactura(order)}
+                  >
+                    Factura
+                  </button>
+
+                  <button
+                    className="btn-whatsapp"
+                    onClick={() => openWhatsApp(order)}
+                  >
+                    WhatsApp
+                  </button>
+
+                  <button
+                    className="btn-process"
+                    onClick={() => updateOrderStatus(order.id, "en_proceso")}
+                  >
+                    En proceso
+                  </button>
+
+                  <button
+                    className="btn-done"
+                    onClick={() => updateOrderStatus(order.id, "entregado")}
+                  >
+                    Entregado
+                  </button>
+
+                  <button
+                    className="btn-delete"
+                    onClick={() => deleteOrder(order.id)}
+                  >
+                    Eliminar
+                  </button>
                 </div>
               </div>
             ))
@@ -362,31 +708,64 @@ function Admin() {
         </div>
       )}
 
-      {/* ===== PRODUCTOS ===== */}
       {activeTab === "productos" && (
         <div className="products-admin-section">
           <form className="admin-form" onSubmit={addOrUpdateProduct}>
             <h2>{editingProductId ? "Editar producto" : "Agregar producto"}</h2>
 
-            <input name="name" placeholder="Nombre" value={productForm.name} onChange={handleProductChange} required />
-            <input name="price" type="number" placeholder="Precio" value={productForm.price} onChange={handleProductChange} required />
-            <input name="category" placeholder="Categoría" value={productForm.category} onChange={handleProductChange} required />
+            <input
+              type="text"
+              name="name"
+              placeholder="Nombre del producto"
+              value={productForm.name}
+              onChange={handleProductChange}
+              required
+            />
 
             <input
+              type="number"
+              name="price"
+              placeholder="Precio"
+              value={productForm.price}
+              onChange={handleProductChange}
+              required
+            />
+
+            <input
+              type="text"
+              name="category"
+              placeholder="Categoría"
+              value={productForm.category}
+              onChange={handleProductChange}
+              required
+            />
+
+            <input
+              type="text"
               name="image"
-              placeholder="URL de imagen (opcional)"
+              placeholder="Pega aquí la URL de la imagen o usa el botón de subir"
               value={productForm.image}
               onChange={handleProductChange}
+              required
             />
 
             <label className="upload-label">
-              Subir imagen
-              <input type="file" accept="image/*" onChange={handleImageUpload} />
+              Subir imagen desde el computador
+              <input
+                type="file"
+                accept="image/*"
+                onChange={handleImageUpload}
+              />
             </label>
 
             {productForm.image && (
               <div className="image-preview-box">
-                <img src={productForm.image} className="image-preview" />
+                <p>Vista previa</p>
+                <img
+                  src={productForm.image}
+                  alt="Vista previa del producto"
+                  className="image-preview"
+                />
               </div>
             )}
 
@@ -400,79 +779,280 @@ function Admin() {
 
             <div className="form-buttons">
               <button type="submit">
-                {editingProductId ? "Actualizar" : "Guardar"}
+                {editingProductId ? "Actualizar producto" : "Guardar producto"}
               </button>
+
               {editingProductId && (
-                <button type="button" className="btn-cancel" onClick={resetProductForm}>
-                  Cancelar
+                <button
+                  type="button"
+                  className="btn-cancel"
+                  onClick={resetProductForm}
+                >
+                  Cancelar edición
                 </button>
               )}
             </div>
           </form>
 
           <div className="admin-list">
-            {filteredProducts.map((p) => (
-              <div key={p.id} className="product-admin-card">
-                <img src={p.image} className="product-admin-image" />
-                <div>
-                  <h4>{p.name}</h4>
-                  <p>{p.category}</p>
-                  <p>${p.price.toLocaleString("es-CO")}</p>
-                </div>
-                <div className="admin-item-actions">
-                  <button className="btn-view" onClick={() => editProduct(p)}>Editar</button>
-                  <button className="btn-delete" onClick={() => deleteProduct(p.id)}>Eliminar</button>
-                </div>
+            {filteredProducts.length === 0 ? (
+              <div className="empty-state">
+                <p>No hay productos para mostrar</p>
               </div>
-            ))}
+            ) : (
+              filteredProducts.map((product) => (
+                <div className="product-admin-card admin-item" key={product.id}>
+                  <div className="product-admin-left">
+                    <img
+                      src={product.image}
+                      alt={product.name}
+                      className="product-admin-image"
+                    />
+                  </div>
+
+                  <div className="product-admin-center">
+                    <h4>{product.name}</h4>
+                    <p><strong>Categoría:</strong> {product.category}</p>
+                    <p><strong>Precio:</strong> ${product.price.toLocaleString("es-CO")}</p>
+                    <p>{product.description}</p>
+                  </div>
+
+                  <div className="admin-item-actions">
+                    <button
+                      className="btn-view"
+                      onClick={() => editProduct(product)}
+                    >
+                      Editar
+                    </button>
+
+                    <button
+                      className="btn-delete"
+                      onClick={() => deleteProduct(product.id)}
+                    >
+                      Eliminar
+                    </button>
+                  </div>
+                </div>
+              ))
+            )}
           </div>
         </div>
       )}
 
-      {/* ===== CLIENTES ===== */}
       {activeTab === "clientes" && (
         <div className="customers-section">
-          {customers.map((c, i) => (
-            <div key={i} className="customer-card">
-              <h3>{c.name}</h3>
-              <p>{c.phone}</p>
-              <p>Pedidos: {c.totalOrders}</p>
-              <p>Total: ${c.totalSpent.toLocaleString("es-CO")}</p>
+          <form className="admin-form" onSubmit={addCustomer}>
+            <h2>Agregar cliente</h2>
+
+            <input
+              type="text"
+              name="name"
+              placeholder="Nombre"
+              value={customerForm.name}
+              onChange={handleCustomerChange}
+              required
+            />
+
+            <input
+              type="text"
+              name="phone"
+              placeholder="Teléfono"
+              value={customerForm.phone}
+              onChange={handleCustomerChange}
+              required
+            />
+
+            <input
+              type="text"
+              name="address"
+              placeholder="Dirección"
+              value={customerForm.address}
+              onChange={handleCustomerChange}
+            />
+
+            <textarea
+              name="notes"
+              placeholder="Notas"
+              value={customerForm.notes}
+              onChange={handleCustomerChange}
+            />
+
+            <button type="submit">Guardar cliente</button>
+          </form>
+
+          {filteredManualCustomers.length > 0 &&
+            filteredManualCustomers.map((customer) => (
+              <div className="customer-card" key={customer.id}>
+                <h3>{customer.name}</h3>
+                <p><strong>Teléfono:</strong> {customer.phone}</p>
+                {customer.address && (
+                  <p><strong>Dirección:</strong> {customer.address}</p>
+                )}
+                {customer.notes && (
+                  <p><strong>Notas:</strong> {customer.notes}</p>
+                )}
+
+                <div className="admin-item-actions" style={{ marginTop: "10px" }}>
+                  <button
+                    className="btn-view"
+                    onClick={() => {
+                      setSelectedCustomerName(customer.name);
+                      setSelectedCustomerOrders(getOrdersByCustomer(customer.phone));
+                    }}
+                  >
+                    Ver pedidos
+                  </button>
+
+                  <button
+                    className="btn-delete"
+                    onClick={() => deleteManualCustomer(customer.id)}
+                  >
+                    Eliminar
+                  </button>
+                </div>
+              </div>
+            ))}
+
+          {customersAuto.length > 0 &&
+            customersAuto.map((customer, index) => (
+              <div className="customer-card" key={`auto-${index}`}>
+                <h3>{customer.name}</h3>
+                <p><strong>Teléfono:</strong> {customer.phone}</p>
+                <p><strong>Tipo más usado:</strong> {customer.orderType}</p>
+                {customer.address && (
+                  <p><strong>Dirección:</strong> {customer.address}</p>
+                )}
+                <p><strong>Pedidos:</strong> {customer.totalOrders}</p>
+                <p>
+                  <strong>Total gastado:</strong> $
+                  {customer.totalSpent.toLocaleString("es-CO")}
+                </p>
+
+                <div className="admin-item-actions" style={{ marginTop: "10px" }}>
+                  <button
+                    className="btn-view"
+                    onClick={() => {
+                      setSelectedCustomerName(customer.name);
+                      setSelectedCustomerOrders(getOrdersByCustomer(customer.phone));
+                    }}
+                  >
+                    Ver pedidos
+                  </button>
+                </div>
+              </div>
+            ))}
+
+          {filteredManualCustomers.length === 0 && customersAuto.length === 0 && (
+            <div className="empty-state">
+              <p>No hay clientes todavía</p>
             </div>
-          ))}
+          )}
         </div>
       )}
 
-      {/* ===== MÉTRICAS ===== */}
       {activeTab === "metricas" && (
         <div className="dashboard-metrics">
           <div className="hero-metric-card sales">
             <div className="metric-icon">💰</div>
             <div>
-              <span>Ventas</span>
+              <span>Ventas estimadas</span>
               <strong>${stats.totalSales.toLocaleString("es-CO")}</strong>
+              <p>Resumen total acumulado de pedidos registrados</p>
             </div>
           </div>
 
           <div className="metrics-grid-pro">
             <div className="metric-pro-card">
-              <span>Pedidos</span>
+              <div className="metric-top">
+                <span>Total pedidos</span>
+                <div className="metric-badge">📦</div>
+              </div>
               <strong>{stats.totalOrders}</strong>
+              <div className="metric-bar">
+                <div className="metric-fill orders-fill" style={{ width: "100%" }}></div>
+              </div>
             </div>
 
             <div className="metric-pro-card">
-              <span>Clientes</span>
-              <strong>{stats.totalCustomers}</strong>
-            </div>
-
-            <div className="metric-pro-card">
-              <span>Productos</span>
+              <div className="metric-top">
+                <span>Productos</span>
+                <div className="metric-badge">🍽️</div>
+              </div>
               <strong>{stats.totalProducts}</strong>
+              <div className="metric-bar">
+                <div
+                  className="metric-fill products-fill"
+                  style={{ width: `${Math.min(stats.totalProducts * 10, 100)}%` }}
+                ></div>
+              </div>
             </div>
 
             <div className="metric-pro-card">
-              <span>Top</span>
+              <div className="metric-top">
+                <span>Clientes</span>
+                <div className="metric-badge">👥</div>
+              </div>
+              <strong>{stats.totalCustomers}</strong>
+              <div className="metric-bar">
+                <div
+                  className="metric-fill customers-fill"
+                  style={{ width: `${Math.min(stats.totalCustomers * 10, 100)}%` }}
+                ></div>
+              </div>
+            </div>
+
+            <div className="metric-pro-card">
+              <div className="metric-top">
+                <span>Más pedido</span>
+                <div className="metric-badge">🔥</div>
+              </div>
               <strong>{stats.topProduct}</strong>
+              <p className="metric-subtext">Producto líder del historial</p>
+            </div>
+          </div>
+
+          <div className="metrics-grid-pro">
+            <div className="metric-pro-card">
+              <div className="metric-top">
+                <span>Ticket promedio</span>
+                <div className="metric-badge">🧾</div>
+              </div>
+              <strong>${Math.round(stats.averageTicket).toLocaleString("es-CO")}</strong>
+              <p className="metric-subtext">Promedio por pedido registrado</p>
+            </div>
+
+            <div className="metric-pro-card">
+              <div className="metric-top">
+                <span>% entregados</span>
+                <div className="metric-badge">✅</div>
+              </div>
+              <strong>{stats.deliveredPercent}%</strong>
+              <div className="metric-bar">
+                <div
+                  className="metric-fill customers-fill"
+                  style={{ width: `${stats.deliveredPercent}%` }}
+                ></div>
+              </div>
+            </div>
+          </div>
+
+          <div className="status-metrics-grid">
+            <div className="status-metric pending-card">
+              <span>Pendientes</span>
+              <strong>{stats.pending}</strong>
+              <p>Pedidos recién ingresados</p>
+            </div>
+
+            <div className="status-metric processing-card">
+              <span>En proceso</span>
+              <strong>{stats.processing}</strong>
+              <p>Pedidos siendo preparados</p>
+            </div>
+
+            <div className="status-metric delivered-card">
+              <span>Entregados</span>
+              <strong>{stats.delivered}</strong>
+              <p>Pedidos ya finalizados</p>
             </div>
           </div>
         </div>
@@ -481,10 +1061,126 @@ function Admin() {
       {selectedOrder && (
         <div className="modal-overlay" onClick={() => setSelectedOrder(null)}>
           <div className="modal-card" onClick={(e) => e.stopPropagation()}>
-            <h2>Pedido #{selectedOrder.id}</h2>
-            {selectedOrder.items.map((i, idx) => (
-              <div key={idx}>{i.name} x{i.quantity}</div>
-            ))}
+            <div className="modal-top">
+              <h2>Detalle del pedido #{selectedOrder.id}</h2>
+              <button className="modal-close" onClick={() => setSelectedOrder(null)}>
+                ✕
+              </button>
+            </div>
+
+            <div className="customer-info">
+              <p><strong>Fecha:</strong> {selectedOrder.date}</p>
+              <p><strong>Cliente:</strong> {selectedOrder.customer?.name || "Sin nombre"}</p>
+              <p><strong>Teléfono:</strong> {selectedOrder.customer?.phone || "Sin teléfono"}</p>
+              <p>
+                <strong>Tipo:</strong>{" "}
+                {selectedOrder.customer?.orderType === "domicilio"
+                  ? "Domicilio"
+                  : selectedOrder.customer?.orderType === "recogen"
+                  ? "Recogen"
+                  : "Comen allá"}
+              </p>
+
+              {selectedOrder.customer?.orderType === "domicilio" && (
+                <p><strong>Dirección:</strong> {selectedOrder.customer?.address || "Sin dirección"}</p>
+              )}
+
+              {selectedOrder.customer?.notes && (
+                <p><strong>Notas:</strong> {selectedOrder.customer.notes}</p>
+              )}
+
+              <p><strong>Estado:</strong> {formatStatus(selectedOrder.status || "pendiente")}</p>
+            </div>
+
+            <div className="order-items">
+              {selectedOrder.items.map((item, i) => (
+                <div className="order-item" key={i}>
+                  <span>{item.name} x{item.quantity}</span>
+                  <strong>${(item.price * item.quantity).toLocaleString("es-CO")}</strong>
+                </div>
+              ))}
+            </div>
+
+            <div className="order-total">
+              Total: ${selectedOrder.total.toLocaleString("es-CO")}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {selectedCustomerOrders && (
+        <div
+          className="modal-overlay"
+          onClick={() => {
+            setSelectedCustomerOrders(null);
+            setSelectedCustomerName("");
+          }}
+        >
+          <div className="modal-card" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-top">
+              <h2>Pedidos de {selectedCustomerName}</h2>
+              <button
+                className="modal-close"
+                onClick={() => {
+                  setSelectedCustomerOrders(null);
+                  setSelectedCustomerName("");
+                }}
+              >
+                ✕
+              </button>
+            </div>
+
+            {selectedCustomerOrders.length === 0 ? (
+              <div className="empty-state">
+                <p>Este cliente no tiene pedidos registrados</p>
+              </div>
+            ) : (
+              <div className="orders-list">
+                {selectedCustomerOrders.map((order) => (
+                  <div className="order-card" key={order.id}>
+                    <div className="order-top">
+                      <div>
+                        <h3>Pedido #{order.id}</h3>
+                        <p>{order.date}</p>
+                      </div>
+
+                      <span className={`status-badge status-${order.status || "pendiente"}`}>
+                        {formatStatus(order.status || "pendiente")}
+                      </span>
+                    </div>
+
+                    <div className="order-items">
+                      {order.items.map((item, i) => (
+                        <div className="order-item" key={i}>
+                          <span>{item.name} x{item.quantity}</span>
+                          <strong>
+                            ${(item.price * item.quantity).toLocaleString("es-CO")}
+                          </strong>
+                        </div>
+                      ))}
+                    </div>
+
+                    <div className="order-total">
+                      Total: ${order.total.toLocaleString("es-CO")}
+                    </div>
+
+                    <div className="admin-item-actions" style={{ marginTop: "12px" }}>
+                      <button className="btn-view" onClick={() => generarFactura(order)}>
+                        Factura
+                      </button>
+
+                      <button className="btn-whatsapp" onClick={() => openWhatsApp(order)}>
+                        WhatsApp
+                      </button>
+
+                      <button className="btn-view" onClick={() => setSelectedOrder(order)}>
+                        Ver detalle
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         </div>
       )}
